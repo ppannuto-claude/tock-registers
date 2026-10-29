@@ -113,3 +113,22 @@ register_map! {
         9usize => array_reference: [[bb; 2]; 3],
     }
 }
+
+register_map! {
+    #![buses(Mmio32, Mmio64)]
+    grouped {
+        /// Group docs.
+        #[group(Dma)],
+        #[group(Other)],
+        #[group = Dma] 0usize => ptr: u32 { Write },
+        4usize => status: u32 { Read },
+        #[group = Other] #[aliased] 4usize => status_alias: u32 { Write },
+    },
+
+    contains_grouped {
+        #[group(Dma)],
+        0usize => ctrl: u8 { Read, Write },
+        #[group = Dma] 1usize => one: grouped,
+        #[group = Dma] 9usize => many: [grouped; 2],
+    },
+}

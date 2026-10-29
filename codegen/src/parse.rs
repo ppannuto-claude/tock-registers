@@ -6,12 +6,15 @@
 //! Input parser. The best reference for what this does is the [ast] module, as the doc comment on
 //! each AST type shows that type's definition syntax.
 
-use crate::ast::{BusAttr, Field, FieldDef, Input, Layout, PerBusInt, RegisterSpec, Value};
+use crate::ast::{BusAttr, Field, FieldDef, Group, Input, Layout, PerBusInt, RegisterSpec, Value};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::token::{Brace, Bracket};
-use syn::{braced, bracketed, Attribute, Error, LitInt, Meta, Result, Token, Type};
+use syn::{
+    braced, bracketed, Attribute, Error, Expr, Ident, LitInt, Meta, MetaNameValue, Result, Token,
+    Type,
+};
 
 impl Parse for Input {
     fn parse(input: ParseStream) -> Result<Input> {
@@ -37,7 +40,7 @@ impl Parse for Input {
                 }
                 layout.bus = bus.clone();
             }
-            let Value::Block(fields) = &layout.value else {
+            let Value::Block { fields, .. } = &layout.value else {
                 layouts.push(layout);
                 continue;
             };
@@ -135,11 +138,37 @@ impl Parse for Value {
         if !input.peek(Brace) {
             return Err(input.error("expected one of: `:`, `{`"));
         }
-        let fields;
-        braced!(fields in input);
-        let fields: Vec<Field> = Punctuated::<_, Token![,]>::parse_terminated(&fields)?
-            .into_iter()
-            .collect();
+        let entries;
+        braced!(entries in input);
+        let entries = Punctuated::<BlockEntry, Token![,]>::parse_terminated(&entries)?;
+        let mut groups: Vec<Group> = Vec::new();
+        let mut fields = Vec::with_capacity(entries.len());
+        for entry in entries {
+            match entry {
+                BlockEntry::Group(group) => {
+                    if let Some(prev) = groups.iter().find(|g| g.name == group.name) {
+                        let mut error = Error::new(group.name.span(), "duplicate group");
+                        error.combine(Error::new(
+                            prev.name.span(),
+                            "note: group already declared here",
+                        ));
+                        return Err(error);
+                    }
+                    groups.push(group);
+                }
+                BlockEntry::Field(field) => fields.push(field),
+            }
+        }
+        for field in &fields {
+            if let FieldDef::Register {
+                group: Some(group), ..
+            } = &field.field_def
+            {
+                if !groups.iter().any(|g| g.name == *group) {
+                    return Err(Error::new(group.span(), "undeclared group"));
+                }
+            }
+        }
         for field in fields.iter().rev() {
             match field.field_def {
                 FieldDef::Padding(None) => {
@@ -152,13 +181,44 @@ impl Parse for Value {
                 FieldDef::Padding(Some(_)) | FieldDef::Register { aliased: false, .. } => break,
             }
         }
-        Ok(Value::Block(fields))
+        Ok(Value::Block { groups, fields })
+    }
+}
+
+/// An entry in a register block's braces: either a field or a group declaration.
+enum BlockEntry {
+    Field(Field),
+    Group(Group),
+}
+
+impl Parse for BlockEntry {
+    fn parse(input: ParseStream) -> Result<BlockEntry> {
+        let is_group_decl =
+            |a: &Attribute| a.path().is_ident("group") && a.meta.require_list().is_ok();
+        if !Attribute::parse_outer(&input.fork())?
+            .iter()
+            .any(is_group_decl)
+        {
+            return input.parse().map(BlockEntry::Field);
+        }
+        let mut docs = Vec::new();
+        let mut name = None;
+        for attr in Attribute::parse_outer(input)? {
+            match attr.path() {
+                p if p.is_ident("doc") => docs.push(attr),
+                _ if name.is_none() && is_group_decl(&attr) => name = Some(attr.parse_args()?),
+                p => return Err(Error::new(p.span(), "unknown attribute on group")),
+            }
+        }
+        let name = name.unwrap();
+        Ok(BlockEntry::Group(Group { docs, name }))
     }
 }
 
 impl Parse for Field {
     fn parse(input: ParseStream) -> Result<Field> {
         let mut aliased_attr: Option<Attribute> = None;
+        let mut group_name: Option<Ident> = None;
         let mut doc_attrs = Vec::new();
         for attr in Attribute::parse_outer(input)? {
             match attr.path() {
@@ -177,6 +237,27 @@ impl Parse for Field {
                     };
                     aliased_attr = Some(attr);
                 }
+                p if p.is_ident("group") => {
+                    let name = match &attr.meta {
+                        Meta::NameValue(MetaNameValue {
+                            value: Expr::Path(path),
+                            ..
+                        }) => path.path.get_ident(),
+                        _ => None,
+                    };
+                    let Some(name) = name else {
+                        return Err(Error::new_spanned(attr, "expected #[group = GroupName]"));
+                    };
+                    if let Some(prev) = group_name {
+                        let mut error = Error::new(name.span(), "multiple #[group] attributes");
+                        error.combine(Error::new(
+                            prev.span(),
+                            "note: group already specified here",
+                        ));
+                        return Err(error);
+                    }
+                    group_name = Some(name.clone());
+                }
                 p => return Err(Error::new(p.span(), "unknown attribute")),
             }
         }
@@ -191,14 +272,19 @@ impl Parse for Field {
                 if let Some(aliased) = aliased_attr {
                     return Err(Error::new_spanned(aliased, "padding cannot be aliased"));
                 }
+                if let Some(group) = group_name {
+                    return Err(Error::new(group.span(), "padding cannot be in a group"));
+                }
             }
             FieldDef::Register {
                 ref mut docs,
                 ref mut aliased,
+                ref mut group,
                 ..
             } => {
                 *docs = doc_attrs;
                 *aliased = aliased_attr.is_some();
+                *group = group_name;
             }
         }
         Ok(Field { offsets, field_def })
@@ -219,6 +305,7 @@ impl Parse for FieldDef {
         Ok(FieldDef::Register {
             docs: Vec::new(),
             aliased: false,
+            group: None,
             name: input.parse()?,
             spec: input.parse()?,
         })

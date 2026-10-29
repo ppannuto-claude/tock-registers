@@ -51,6 +51,7 @@ pub fn generate(
     let buses = layout.bus.as_slice();
     let element_definition;
     let mut real;
+    let has_groups;
 
     // Step 2: Work through different parts of the input to set the output variables.
 
@@ -74,11 +75,14 @@ pub fn generate(
             operations,
         );
         real = quote![Element<B>];
+        has_groups = quote![false];
     } else {
         element_bound = quote![#element_type::Interface];
         bus_bound = quote_spanned![element_type.span()=>#element_type::Bus];
         element_definition = quote![];
         real = quote![#element_type::Real<B>];
+        // A reference exposes the referenced layout's Real, including all of its groups.
+        has_groups = quote_spanned![element_type.span()=>#element_type::HAS_GROUPS];
     }
     let mut interface_bound = element_bound.clone();
     // match that handles the difference between scalar registers, non-nested array registers, and
@@ -127,6 +131,8 @@ pub fn generate(
         #visibility mod #name {
             #allows use super::*;
             #interface_comment pub trait Interface: #interface_bound {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = #has_groups;
             #len_definition
             #bus_comment pub trait Bus: #bus_bound + sealed::Bus {}
             #(impl Bus for #buses {})*

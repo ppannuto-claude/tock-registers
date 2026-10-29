@@ -3,14 +3,20 @@
 // Copyright Tock Contributors 2026.
 // Copyright Better Bytes 2026.
 
-use crate::ast::{Field, FieldDef, Layout, PerBusInt};
+use crate::ast::{Field, FieldDef, Group, Layout, PerBusInt};
 use crate::{new_doc_comment, register_definition, Env};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
-use syn::{spanned::Spanned, Ident, Path, TypePath};
+use syn::{spanned::Spanned, Ident, Index, Path, TypePath};
 
 /// Generates the module for a register block.
-pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Field]) -> TokenStream {
+pub fn generate(
+    env: Env,
+    tock_registers: &Path,
+    layout: &Layout,
+    groups: &[Group],
+    fields: &[Field],
+) -> TokenStream {
     // At a high level, this function has:
     //
     // 1. A set of variable declarations (of type TokenStream or Vec<TokenStream>)
@@ -36,9 +42,13 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
     let docs = &layout.docs;
     let visibility = &layout.visibility;
     let name = &layout.name;
-    let interface_comment = interface_doc_comment();
-    let mut interface_fields = TokenStream::new();
-    let mut deref_impl_items = TokenStream::new();
+    // Generated code for each register group, starting with the default group.
+    let mut group_tokens: Vec<_> = [None]
+        .into_iter()
+        .chain(groups.iter().map(Some))
+        .map(GroupTokens::new)
+        .collect();
+    let mut nesting_checks = TokenStream::new();
     let lengths_comment = lengths_doc_comment();
     let mut len_definitions = TokenStream::new();
     let bus_comment = bus_doc_comment();
@@ -54,15 +64,13 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
     let bus_default = layout.bus.generic_default();
     let real_comment = real_doc_comment();
     let new_comment = new_doc_comment();
-    let mut interface_bounds = TokenStream::new();
-    let mut interface_impl_items = TokenStream::new();
     let mut real_structs = TokenStream::new();
 
     // Step 2: Loop through each field, update the variables.
     for field in fields.iter() {
         // This `match` statement handles padding and `continue`s to the next iteration on padding
         // fields, so the rest of the body of this loop does not need to special-case for padding.
-        let (docs, aliased, name, register) = match &field.field_def {
+        let (docs, aliased, group, name, register) = match &field.field_def {
             FieldDef::Padding(sizes) => {
                 add_offset_tests(
                     tock_registers,
@@ -84,10 +92,23 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
             FieldDef::Register {
                 docs,
                 aliased,
+                group,
                 name,
                 spec,
-            } => (docs, *aliased, name, spec),
+            } => (docs, *aliased, group, name, spec),
         };
+        let GroupTokens {
+            group: field_group,
+            trait_name,
+            interface_fields,
+            deref_impl_items,
+            interface_bounds,
+            interface_impl_items,
+            only_impl_items,
+        } = group_tokens
+            .iter_mut()
+            .find(|g| g.group.map(|g| &g.name) == group.as_ref())
+            .expect("undeclared group");
         // The rest of this loop body is for register fields. It consists of a series of
         // conditionals and loops that all switch/iterate on a different aspect of the field.
         let element_type = &register.element_type;
@@ -120,6 +141,16 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
                 .map(|b| quote![#element_type::Real<#b>])
                 .collect();
             bus_bounds.extend(quote_spanned![element_type.span()=>+ #element_type::Bus]);
+            // This field's type is the referenced layout's Real, which exposes all of that layout's
+            // groups, so the default group (and InterfaceOnly) must not contain it.
+            if field_group.is_none() {
+                let msg = format!(
+                    "`{name}` refers to a layout with register groups, so it must be assigned to a \
+                     non-default group"
+                );
+                nesting_checks.extend(quote_spanned![element_type.span()=>
+                    assert!(!#element_type::HAS_GROUPS, #msg);]);
+            }
         };
         interface_bounds.extend(quote![#real: #interface_bound,]);
         // match that handles the difference between scalar registers, non-nested array registers,
@@ -155,8 +186,14 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
             #(#docs)* fn #name(&self) -> Self::#name<'_>;
         });
         deref_impl_items.extend(quote! {
-            type #name<'s> = <T::Target as Interface>::#name<'s> where Self: 's;
+            type #name<'s> = <T::Target as #trait_name>::#name<'s> where Self: 's;
             fn #name(&self) -> Self::#name<'_> { self.deref().#name() }
+        });
+        // `self.0.#name` would lex `0.` as a float literal.
+        let inner = Index::from(0);
+        only_impl_items.extend(quote! {
+            type #name<'s> = <T as #trait_name>::#name<'s> where Self: 's;
+            fn #name(&self) -> Self::#name<'_> { self.#inner.#name() }
         });
         let name_offset = format_ident!("{name}_offset");
         // match that handles the difference between scalar offset definitions and array offset
@@ -209,13 +246,61 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
     }
 
     // Step 3: the final quote! call that puts everything together.
+    let has_groups = !groups.is_empty();
+    let mut group_traits = TokenStream::new();
+    let mut real_group_impls = TokenStream::new();
+    for tokens in group_tokens {
+        let GroupTokens {
+            group,
+            trait_name,
+            interface_fields,
+            deref_impl_items,
+            interface_bounds,
+            interface_impl_items,
+            only_impl_items,
+        } = tokens;
+        let trait_docs = match group {
+            None => interface_doc_comment(),
+            Some(Group { docs, .. }) if !docs.is_empty() => quote![#(#docs)*],
+            Some(Group { name, .. }) => {
+                let msg = format!("Trait representing the `{name}` group of this register block.");
+                quote![#[doc = #msg]]
+            }
+        };
+        group_traits.extend(quote! {
+            #trait_docs pub trait #trait_name { #interface_fields }
+            impl<T: #tock_registers::internal::core::ops::Deref<Target: #trait_name>>
+                #trait_name for T { #deref_impl_items }
+        });
+        real_group_impls.extend(quote! {
+            impl<B: Bus> #trait_name for Real<B> where #interface_bounds {
+                #interface_impl_items
+            }
+        });
+        // The narrowing wrapper is only useful when there is more than one group.
+        if !has_groups {
+            continue;
+        }
+        let only_name = format_ident!("{trait_name}Only");
+        let only_docs = only_doc_comment(&trait_name);
+        let new_msg = format!("Wraps `inner`, exposing only its [{trait_name}] implementation.");
+        group_traits.extend(quote! {
+            #only_docs #[derive(Clone)] pub struct #only_name<T>(T);
+            impl<T: #trait_name> #only_name<T> {
+                #[doc = #new_msg] pub const fn new(inner: T) -> Self { Self(inner) }
+            }
+            impl<T: #tock_registers::internal::core::marker::Copy>
+                #tock_registers::internal::core::marker::Copy for #only_name<T> {}
+            impl<T: #trait_name> #trait_name for #only_name<T> { #only_impl_items }
+        });
+    }
     quote! {
         #(#docs)*
         #visibility mod #name {
             #![allow(non_camel_case_types #env_allows)] use super::*;
-            #interface_comment pub trait Interface { #interface_fields }
-            impl<T: #tock_registers::internal::core::ops::Deref<Target: Interface>>
-                Interface for T { #deref_impl_items }
+            #group_traits
+            /// Whether this layout declares register groups.
+            pub const HAS_GROUPS: bool = #has_groups;
             #lengths_comment pub mod lengths { #len_definitions }
             #bus_comment #[allow(clippy::trait_duplication_in_bounds)]
             pub trait Bus: #tock_registers::Address #bus_bounds + sealed::Bus {
@@ -234,7 +319,7 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
                 #borrowed_bus_defs
             }
             impl<B: Bus> sealed::Bus for #tock_registers::BorrowedBus<'_, B> {}
-            const _: () = { #offset_tests };
+            const _: () = { #offset_tests #nesting_checks };
             mod sealed { pub trait Bus {} }
             #real_comment #[derive(Clone)] pub struct Real<B: Bus #bus_default> {
                 address: B,
@@ -246,9 +331,7 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
                 }
             }
             impl<B: Bus> #tock_registers::internal::core::marker::Copy for Real<B> {}
-            impl<B: Bus> Interface for Real<B> where #interface_bounds {
-                #interface_impl_items
-            }
+            #real_group_impls
             // Safety: Our size calculation for Bus::SIZE is correct. Bus is sealed, so there can
             // be no other implementations of Bus.
             unsafe impl<B: Bus> #tock_registers::Span for Real<B> {
@@ -262,6 +345,43 @@ pub fn generate(env: Env, tock_registers: &Path, layout: &Layout, fields: &[Fiel
             #real_structs
         }
     }
+}
+
+/// Generated code for one register group.
+struct GroupTokens<'g> {
+    /// None for the default group.
+    group: Option<&'g Group>,
+    trait_name: Ident,
+    interface_fields: TokenStream,
+    deref_impl_items: TokenStream,
+    interface_bounds: TokenStream,
+    interface_impl_items: TokenStream,
+    only_impl_items: TokenStream,
+}
+
+impl<'g> GroupTokens<'g> {
+    fn new(group: Option<&'g Group>) -> Self {
+        Self {
+            group,
+            trait_name: match group {
+                None => format_ident!("Interface"),
+                Some(group) => format_ident!("{}Interface", group.name),
+            },
+            interface_fields: TokenStream::new(),
+            deref_impl_items: TokenStream::new(),
+            interface_bounds: TokenStream::new(),
+            interface_impl_items: TokenStream::new(),
+            only_impl_items: TokenStream::new(),
+        }
+    }
+}
+
+pub fn only_doc_comment(trait_name: &Ident) -> TokenStream {
+    let msg = format!(
+        "Narrowed view of a register block that implements only [{trait_name}]. `T` may be owned \
+         (`R`) or borrowed (`&R`)."
+    );
+    quote![#[doc = #msg]]
 }
 
 pub fn interface_doc_comment() -> TokenStream {

@@ -27,6 +27,8 @@ fn scalar_definition_example() {
             #![allow(dead_code)] use super::*;
             #interface_comment
             pub trait Interface: ::tock_registers::Register<DataType = u8> + Read + Write {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = false;
             #bus_comment pub trait Bus:
                 // Bus needs this bound so that the Span impl for Real<B> can access PADDED_SIZE.
                 // It would be ideal to be able to bound BusRead/BusWrite as well, as that would
@@ -97,6 +99,8 @@ fn scalar_reference_example() {
         pub mod foo {
             #![allow(dead_code)] use super::*;
             #interface_comment pub trait Interface: status::Interface {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = status::HAS_GROUPS;
             #bus_comment pub trait Bus: status::Bus + sealed::Bus {}
             impl Bus for Mmio32 {}
             impl Bus for Mmio64 {}
@@ -135,6 +139,8 @@ fn generic_operation() {
             #![allow(dead_code)] use super::*;
             #interface_comment
             pub trait Interface: ::tock_registers::Register<DataType = u8> + Dance<Waltz> {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = false;
             #bus_comment pub trait Bus: ::tock_registers::DataTypeBus<u8> + sealed::Bus {}
             impl Bus for Mmio32 {}
             impl sealed::Bus for Mmio32 {}

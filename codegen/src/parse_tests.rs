@@ -3,7 +3,7 @@
 // Copyright Tock Contributors 2026.
 // Copyright Better Bytes 2026.
 
-use crate::ast::{Field, FieldDef, Input, PerBusInt, RegisterSpec};
+use crate::ast::{Field, FieldDef, Group, Input, PerBusInt, RegisterSpec, Value};
 use quote::quote;
 use syn::{parse2, parse_quote, Type};
 
@@ -112,6 +112,7 @@ fn field() {
             field_def: FieldDef::Register {
                 docs: vec![parse_quote![#[doc = r"A"]], parse_quote![#[doc = r"B"]]],
                 aliased: false,
+                group: None,
                 name: parse_quote![a],
                 spec: RegisterSpec {
                     element_type: parse_quote![b],
@@ -142,6 +143,7 @@ fn field() {
             field_def: FieldDef::Register {
                 docs: vec![],
                 aliased: true,
+                group: None,
                 name: parse_quote![a],
                 spec: RegisterSpec {
                     element_type: parse_quote![u8],
@@ -176,6 +178,7 @@ fn field_def() {
         FieldDef::Register {
             docs: vec![],
             aliased: false,
+            group: None,
             name: parse_quote![a],
             spec: RegisterSpec {
                 element_type: parse_quote![status],
@@ -217,4 +220,70 @@ fn register_def() {
     let expected_sizes = [parse_quote![2], parse_quote![3], parse_quote![4]];
     assert_eq!(register.array_sizes, expected_sizes);
     assert_eq!(register.operations, None);
+}
+
+#[test]
+fn groups() {
+    let input: Input = parse_quote! {
+        ::tock_registers
+        #[bus(Mmio32)]
+        foo {
+            /// A
+            #[group(Dma)],
+            #[group(Other)],
+            0 => a: u8 { Read },
+            /// B
+            #[group = Dma] 1 => b: u8 { Read },
+        }
+    };
+    let Value::Block { groups, fields } = &input.layouts[0].value else {
+        panic!("not a block");
+    };
+    assert_eq!(
+        groups,
+        &[
+            Group {
+                docs: vec![parse_quote![#[doc = r" A"]]],
+                name: parse_quote![Dma],
+            },
+            Group {
+                docs: vec![],
+                name: parse_quote![Other],
+            },
+        ]
+    );
+    let groups: Vec<_> = fields
+        .iter()
+        .map(|field| match &field.field_def {
+            FieldDef::Register { group, .. } => group.clone(),
+            FieldDef::Padding(_) => panic!("unexpected padding"),
+        })
+        .collect();
+    assert_eq!(groups, [None, Some(parse_quote![Dma])]);
+
+    // Shortcut that parses a block with the given contents and returns the error message.
+    let error = |contents| {
+        parse2::<Input>(quote![::tock_registers #[bus(Mmio32)] foo { #contents }])
+            .unwrap_err()
+            .to_string()
+    };
+    assert!(
+        error(quote![0 => a: u8 { Read }, #[group = Dma] 1 => b: u8 { Read }])
+            .contains("undeclared group")
+    );
+    assert!(error(quote![#[group(Dma)], #[group(Dma)]]).contains("duplicate group"));
+    assert!(error(quote![#[group(Dma)] 0 => a: u8 { Read }]).contains("expected `,`"));
+    assert!(error(quote![#[aliased] #[group(Dma)]]).contains("unknown attribute on group"));
+    assert!(
+        error(quote![#[group(Dma)], #[group = Dma] 0 => _: 1, 1 => a: u8 { Read }])
+            .contains("padding cannot be in a group")
+    );
+    assert!(
+        error(quote![#[group(Dma)], #[group = Dma] #[group = Dma] 0 => a: u8 { Read }])
+            .contains("multiple #[group] attributes")
+    );
+    assert!(
+        error(quote![#[group(Dma)], #[group = "Dma"] 0 => a: u8 { Read }])
+            .contains("expected #[group = GroupName]")
+    );
 }

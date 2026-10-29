@@ -91,6 +91,8 @@ fn all_field_types_example() {
                 fn flat_array_reference(&self) -> Self::flat_array_reference<'_>
                     { self.deref().flat_array_reference() }
             }
+            /// Whether this layout declares register groups.
+            pub const HAS_GROUPS: bool = false;
             #lengths_comment pub mod lengths {
                 pub enum array_definition<const N: usize> {}
                 impl ::tock_registers::array::Len for array_definition<0usize> { const LEN: usize = 2; }
@@ -181,6 +183,15 @@ fn all_field_types_example() {
                     ::tock_registers::RealRegisterArray<real_flat_array_definition<Mmio64>,
                     lengths::flat_array_definition> as ::tock_registers::Span>::SIZE),
                     "offset mismatch for bus Mmio64");
+                // Default-group fields that refer to other layouts must not refer to layouts with
+                // register groups, or the default group's interface (and its InterfaceOnly wrapper)
+                // would expose the referenced layout's other groups.
+                assert!(!a::HAS_GROUPS,
+                    "`scalar_reference` refers to a layout with register groups, so it must be assigned to a non-default group");
+                assert!(!b::HAS_GROUPS,
+                    "`array_reference` refers to a layout with register groups, so it must be assigned to a non-default group");
+                assert!(!c::HAS_GROUPS,
+                    "`flat_array_reference` refers to a layout with register groups, so it must be assigned to a non-default group");
             };
             mod sealed { pub trait Bus {} }
             #real_comment #[derive(Clone)] pub struct Real<B: Bus> {

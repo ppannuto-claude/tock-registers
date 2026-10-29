@@ -77,6 +77,8 @@ fn offsets() {
                 type padded_pos<'s> = <T::Target as Interface>::padded_pos<'s> where Self: 's;
                 fn padded_pos(&self) -> Self::padded_pos<'_> { self.deref().padded_pos() }
             }
+            /// Whether this layout declares register groups.
+            pub const HAS_GROUPS: bool = false;
             #lengths_comment pub mod lengths {}
             #bus_comment #[allow(clippy::trait_duplication_in_bounds)]
             pub trait Bus: ::tock_registers::Address + ::tock_registers::DataTypeBus<usize> +

@@ -28,6 +28,8 @@ fn scalar_definition() {
             /// Trait representing this register's operations. Driver code can use this trait to work
             /// with both real hardware and fake implementations of the register (for unit testing).
             pub trait Interface: ::tock_registers::Register<DataType = u8> + Read + Write {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = false;
             /// Buses supported by this register.
             pub trait Bus: ::tock_registers::DataTypeBus<u8> + sealed::Bus {}
             impl Bus for Mmio32 {}
@@ -95,6 +97,8 @@ fn array_definition() {
             /// with both real hardware and fake implementations of the register (for unit testing).
             pub trait Interface: ::tock_registers::RegisterArray<Len,
                 Element: ::tock_registers::Register<DataType = u8> + Read + Write> {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = false;
             pub enum Len {}
             impl ::tock_registers::array::Len for Len { const LEN: usize = 2; }
             /// Buses supported by this register.
@@ -167,6 +171,8 @@ fn scalar_reference() {
             /// Trait representing this register's operations. Driver code can use this trait to work
             /// with both real hardware and fake implementations of the register (for unit testing).
             pub trait Interface: status::Interface {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = status::HAS_GROUPS;
             /// Buses supported by this register.
             pub trait Bus: status::Bus + sealed::Bus {}
             impl Bus for Mmio32 {}
@@ -203,6 +209,8 @@ fn array_reference() {
             pub trait Interface: ::tock_registers::RegisterArray<Len<1usize>,
                 Element: ::tock_registers::RegisterArray<Len<0usize>, Element: status::Interface>
             > {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = status::HAS_GROUPS;
             pub enum Len<const N: usize> {}
             impl ::tock_registers::array::Len for Len<0usize> { const LEN: usize = 2; }
             impl ::tock_registers::array::Len for Len<1usize> { const LEN: usize = 3; }

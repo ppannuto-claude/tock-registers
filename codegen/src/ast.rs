@@ -140,8 +140,40 @@ impl BusAttr {
 /// ```
 #[cfg_attr(test, derive(Debug))]
 pub enum Value {
-    Block(Vec<Field>),
+    Block {
+        /// The register groups declared in this block, in declaration order. Does not include the
+        /// default group.
+        groups: Vec<Group>,
+        fields: Vec<Field>,
+    },
     Single(RegisterSpec),
+}
+
+/// A register group declaration in a register block: a block entry that consists only of
+/// attributes. Group `Dma` generates the trait `DmaInterface`, documented by the group's doc
+/// comments. Registers that are not assigned to a group are in the default group (`Interface`).
+///
+/// ```
+/// # use tock_registers::{Read, Write};
+/// # fn main() {}
+/// tock_registers::register_map_mmio32! {
+///     foo {
+///         /// Doc comment for the `Dma` group.
+///         #[group(Dma)],
+///       //^^^^^^^^^^^^^ Group
+///
+///         #[group = Dma] 0 => ptr: u32 { Write },
+///         //             Field assigned to the `Dma` group
+///
+///         4 => status: u32 { Read },
+///         //  Field in the default group
+///     }
+/// }
+/// ```
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct Group {
+    pub docs: Vec<Attribute>,
+    pub name: Ident,
 }
 
 /// An individual field in a register block. A Field can be padding or a register.
@@ -176,8 +208,8 @@ pub struct Field {
 
 /// Contents of a field.
 ///
-/// Note that when a FieldDef::Register is initially parsed, `aliased` is always false and `docs`
-/// is always empty. The Parse impl on Field sets those fields.
+/// Note that when a FieldDef::Register is initially parsed, `aliased` is always false, `docs` is
+/// always empty, and `group` is always None. The Parse impl on Field sets those fields.
 ///
 /// ```
 /// # use tock_registers::Read;
@@ -207,6 +239,8 @@ pub enum FieldDef {
         /// Doc comments for this register.
         docs: Vec<Attribute>,
         aliased: bool,
+        /// The register group this register belongs to, or None for the default group.
+        group: Option<Ident>,
         name: Ident,
         spec: RegisterSpec,
     },

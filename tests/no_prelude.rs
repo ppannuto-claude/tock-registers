@@ -34,3 +34,18 @@ register_map_mmio32! {
         [1] => inner: inner,
     },
 }
+
+register_map_mmio32! {
+    grouped {
+        #[group(Dma)],
+        #[group = Dma] 0 => ptr: u32 { Write },
+        4 => status: u32 { Read },
+    },
+
+    contains_grouped {
+        #[group(Dma)],
+        0 => ctrl: u8 { Read, Write },
+        #[group = Dma] 1 => one: grouped,
+        #[group = Dma] 9 => many: [grouped; 2],
+    },
+}

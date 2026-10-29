@@ -26,6 +26,8 @@ fn empty() {
             #interface_comment pub trait Interface {}
             impl<T: ::tock_registers::internal::core::ops::Deref<Target: Interface>>
                 Interface for T {}
+            /// Whether this layout declares register groups.
+            pub const HAS_GROUPS: bool = false;
             #lengths_comment pub mod lengths {}
             #bus_comment #[allow(clippy::trait_duplication_in_bounds)]
             pub trait Bus: ::tock_registers::Address + sealed::Bus {

@@ -84,6 +84,8 @@ fn doc_comments() {
                 fn array_reference(&self) -> Self::array_reference<'_>
                     { self.deref().array_reference() }
             }
+            /// Whether this layout declares register groups.
+            pub const HAS_GROUPS: bool = false;
             /// Phantom types encoding the lengths of register arrays in this block.
             ///
             /// Driver code can use these as type parameters when writing generic functions
@@ -156,6 +158,10 @@ fn doc_comments() {
                     Mmio32> as ::tock_registers::Span>::SIZE), "offset mismatch for bus Mmio32");
                 assert!(8 == ::tock_registers::internal::core::convert::identity(7 + <a::Real<
                     Mmio64> as ::tock_registers::Span>::SIZE), "offset mismatch for bus Mmio64");
+                assert!(!a::HAS_GROUPS,
+                    "`scalar_reference` refers to a layout with register groups, so it must be assigned to a non-default group");
+                assert!(!b::HAS_GROUPS,
+                    "`array_reference` refers to a layout with register groups, so it must be assigned to a non-default group");
             };
             mod sealed { pub trait Bus {} }
             /// Struct implementing [Interface] for use with the real hardware.

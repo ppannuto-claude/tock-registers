@@ -2,6 +2,9 @@
 
 ## main
 
+- `register_map!` blocks can split their registers into groups, each with its
+  own `Interface` trait and a narrowing wrapper (#64).
+
 ## v0.11.0
 
 This change introduces `register_map!`, the successor to `register_structs!`. It

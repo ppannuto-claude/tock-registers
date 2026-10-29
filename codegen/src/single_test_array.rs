@@ -30,6 +30,8 @@ fn flat_array_definition_example() {
             // For arrays, we wrap the element's operations in a RegisterArray<> trait.
             #interface_comment pub trait Interface: ::tock_registers::RegisterArray<Len,
                 Element: ::tock_registers::Register<DataType = u8> + Read + Write> {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = false;
             // For flat arrays, Len does not need to be generic.
             pub enum Len {}
             impl ::tock_registers::array::Len for Len { const LEN: usize = 2; }
@@ -99,6 +101,8 @@ fn nested_array_definition_example() {
                     Element: ::tock_registers::Register<DataType = u8> + Read + Write
                 >
             > {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = false;
             // For nested arrays, Len is generic. Len<0> is the innermost array's length, and the
             // highest-N Len is the outermost array's length.
             pub enum Len<const N: usize> {}
@@ -159,6 +163,8 @@ fn flat_array_reference_example() {
             use super::*;
             #interface_comment pub trait Interface:
                 ::tock_registers::RegisterArray<Len, Element: status::Interface> {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = status::HAS_GROUPS;
             pub enum Len {}
             impl ::tock_registers::array::Len for Len { const LEN: usize = 2; }
             #bus_comment pub trait Bus: status::Bus + sealed::Bus {}
@@ -195,6 +201,8 @@ fn nested_array_reference_example() {
             #interface_comment pub trait Interface: ::tock_registers::RegisterArray<Len<1usize>,
                 Element: ::tock_registers::RegisterArray<Len<0usize>, Element: status::Interface>
             > {}
+            /// Whether this layout declares (or refers to a layout with) register groups.
+            pub const HAS_GROUPS: bool = status::HAS_GROUPS;
             pub enum Len<const N: usize> {}
             impl ::tock_registers::array::Len for Len<0usize> { const LEN: usize = 2; }
             impl ::tock_registers::array::Len for Len<1usize> { const LEN: usize = 3; }

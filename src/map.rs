@@ -287,6 +287,71 @@
 /// }
 /// ```
 ///
+/// # Register groups
+/// A register block can split its registers into groups. Each group `X` gets its own trait,
+/// `XInterface`; registers not assigned to a group are in `Interface`. `Real` implements all of
+/// them.
+///
+/// Groups are an ownership tool: a single owner (e.g. a DMA manager) holds the `Real` and lends out
+/// narrowed views. `XInterfaceOnly<T>` (and `InterfaceOnly<T>` for the default group) wraps a
+/// register block, owned or borrowed, and implements only that group's trait.
+///
+/// A group is declared by an entry with only attributes. Its doc comments become the trait's:
+/// ```
+/// # fn main() {}
+/// use tock_registers::{register_map, Mmio32, Read, Write};
+/// register_map! {
+///     #[bus(Mmio32)]
+///     aes {
+///         /// The `ptr` and `task_start` registers make the hardware access memory.
+///         #[group(Dma)],
+///         #[group = Dma] 0 => task_start: u32 { Write },
+///                        4 => event_done: u32 { Read, Write },
+///         #[group = Dma] 8 => ptr: u32 { Write },
+///     }
+/// }
+/// // aes::Interface has event_done; aes::DmaInterface has task_start and ptr.
+/// fn start<R: aes::Interface + aes::DmaInterface>(all_regs: &R) -> aes::InterfaceOnly<&R> {
+///     all_regs.ptr().set(0x2000_0000);
+///     all_regs.task_start().set(1);
+///     aes::InterfaceOnly::new(all_regs)
+/// }
+/// ```
+/// A narrowed view does not expose the other groups' registers:
+/// ```compile_fail,E0599
+/// # fn main() {}
+/// # use tock_registers::{register_map, Mmio32, Read, Write};
+/// # register_map! {
+/// #     #[bus(Mmio32)]
+/// #     aes {
+/// #         #[group(Dma)],
+/// #         #[group = Dma] 0 => task_start: u32 { Write },
+/// #                        4 => event_done: u32 { Read, Write },
+/// #         #[group = Dma] 8 => ptr: u32 { Write },
+/// #     }
+/// # }
+/// fn misuse<R: aes::Interface + aes::DmaInterface>(all_regs: &R) {
+///     let view = aes::InterfaceOnly::new(all_regs);
+///     view.ptr().set(0x2000_0000);
+/// }
+/// ```
+/// A field that refers to a layout with groups must be in a non-default group. Otherwise,
+/// `InterfaceOnly` would expose the referenced layout's `Real`, including all of its groups:
+/// ```compile_fail,E0080
+/// # fn main() {}
+/// # use tock_registers::{register_map, Mmio32, Write};
+/// register_map! {
+///     #![bus(Mmio32)]
+///     channel {
+///         #[group(Dma)],
+///         #[group = Dma] 0 => ptr: u32 { Write },
+///     },
+///     controller {
+///         0 => channel: channel,
+///     },
+/// }
+/// ```
+///
 /// [`Read`]: trait@crate::Read
 /// [`Write`]: trait@crate::Write
 #[macro_export]
